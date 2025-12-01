@@ -417,7 +417,7 @@ app.get('/health', (req, res) => {
 // -------------------------------------------------------------------------
 // WEBHOOK MAILGUN - Réception des emails
 // -------------------------------------------------------------------------
-app.post('/webhook/mailgun', upload.none(), (req, res) => {
+app.post('/webhook/mailgun', upload.any(), (req, res) => {
     console.log('=== Réception webhook Mailgun ===');
 
     // Debug: afficher la structure complète reçue

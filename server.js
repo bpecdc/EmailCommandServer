@@ -465,8 +465,23 @@ async function sendResponseEmail(to, subject, text) {
  * Génère le contenu de l'email de réponse selon le type et le résultat
  */
 function generateResponseContent(command, result) {
-    const statusEmoji = command.status === 'executed' ? '✅' : '❌';
-    const statusText = command.status === 'executed' ? 'Exécutée' : 'Échouée';
+    let statusEmoji, statusText;
+
+    switch (command.status) {
+        case 'executed':
+            statusEmoji = '✅';
+            statusText = 'Exécutée avec succès';
+            break;
+        case 'rejected':
+            statusEmoji = '🚫';
+            statusText = 'Refusée';
+            break;
+        case 'failed':
+        default:
+            statusEmoji = '❌';
+            statusText = 'Échouée';
+            break;
+    }
 
     let subject = `${statusEmoji} Re: ${command.originalSubject || command.type}`;
 
@@ -656,8 +671,8 @@ app.patch('/api/commands/:id', async (req, res) => {
 
     console.log(`Commande ${id} mise à jour: ${status}`);
 
-    // Envoyer un email de réponse si la commande a été exécutée ou a échoué
-    if (status === CommandStatus.EXECUTED || status === CommandStatus.FAILED) {
+    // Envoyer un email de réponse si la commande a été exécutée, échouée ou rejetée
+    if (status === CommandStatus.EXECUTED || status === CommandStatus.FAILED || status === CommandStatus.REJECTED) {
         const recipientEmail = extractEmail(updatedCommand.sender);
         const { subject, body } = generateResponseContent(updatedCommand, result);
 

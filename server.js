@@ -39,7 +39,12 @@ const CONFIG = {
     COMMANDS_FILE: path.join(__dirname, 'data', 'commands.json'),
 
     // Durée de rétention des commandes traitées (en jours)
-    RETENTION_DAYS: 7
+    RETENTION_DAYS: 7,
+
+    // Configuration Mailgun pour l'envoi d'emails de réponse
+    MAILGUN_DOMAIN: process.env.MAILGUN_DOMAIN || 'sandboxc257728c07b4417ebde91e498cd59dc6.mailgun.org',
+    MAILGUN_SENDING_KEY: process.env.MAILGUN_SENDING_KEY || '', // Clé API pour l'envoi (différente de la webhook key)
+    MAILGUN_FROM_EMAIL: process.env.MAILGUN_FROM_EMAIL || 'DailyOrganizer <commands@sandboxc257728c07b4417ebde91e498cd59dc6.mailgun.org>'
 };
 
 // Créer le dossier data s'il n'existe pas
@@ -399,6 +404,88 @@ function isAuthorizedSender(sender) {
 }
 
 // ============================================================================
+// ENVOI D'EMAILS DE RÉPONSE
+// ============================================================================
+
+/**
+ * Extrait l'adresse email pure d'un format "Nom <email>" ou "email"
+ */
+function extractEmail(sender) {
+    const emailMatch = sender.match(/<([^>]+)>/) || [null, sender];
+    return emailMatch[1].trim();
+}
+
+/**
+ * Envoie un email de réponse via l'API Mailgun
+ * @param {string} to - Adresse email du destinataire
+ * @param {string} subject - Sujet de l'email
+ * @param {string} text - Corps du message en texte brut
+ * @returns {Promise<boolean>} - true si envoyé avec succès
+ */
+async function sendResponseEmail(to, subject, text) {
+    if (!CONFIG.MAILGUN_SENDING_KEY) {
+        console.warn('MAILGUN_SENDING_KEY non configurée, email de réponse non envoyé');
+        return false;
+    }
+
+    const url = `https://api.mailgun.net/v3/${CONFIG.MAILGUN_DOMAIN}/messages`;
+
+    // Préparer les données du formulaire
+    const formData = new URLSearchParams();
+    formData.append('from', CONFIG.MAILGUN_FROM_EMAIL);
+    formData.append('to', to);
+    formData.append('subject', subject);
+    formData.append('text', text);
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Basic ' + Buffer.from('api:' + CONFIG.MAILGUN_SENDING_KEY).toString('base64'),
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: formData.toString()
+        });
+
+        if (response.ok) {
+            console.log(`Email de réponse envoyé à ${to}`);
+            return true;
+        } else {
+            const errorText = await response.text();
+            console.error(`Erreur envoi email: ${response.status} - ${errorText}`);
+            return false;
+        }
+    } catch (error) {
+        console.error('Erreur lors de l\'envoi de l\'email:', error);
+        return false;
+    }
+}
+
+/**
+ * Génère le contenu de l'email de réponse selon le type et le résultat
+ */
+function generateResponseContent(command, result) {
+    const statusEmoji = command.status === 'executed' ? '✅' : '❌';
+    const statusText = command.status === 'executed' ? 'Exécutée' : 'Échouée';
+
+    let subject = `${statusEmoji} Re: ${command.originalSubject || command.type}`;
+
+    let body = `DailyOrganizer - Résultat de votre commande\n`;
+    body += `${'─'.repeat(45)}\n\n`;
+    body += `Commande: ${command.description}\n`;
+    body += `Statut: ${statusText}\n\n`;
+
+    if (result) {
+        body += `Résultat:\n${result}\n`;
+    }
+
+    body += `\n${'─'.repeat(45)}\n`;
+    body += `Envoyé automatiquement par DailyOrganizer`;
+
+    return { subject, body };
+}
+
+// ============================================================================
 // ROUTES
 // ============================================================================
 
@@ -546,7 +633,7 @@ app.get('/api/commands', (req, res) => {
 // -------------------------------------------------------------------------
 // API iOS - Mettre à jour le statut d'une commande
 // -------------------------------------------------------------------------
-app.patch('/api/commands/:id', (req, res) => {
+app.patch('/api/commands/:id', async (req, res) => {
     // Vérifier la clé API
     const apiKey = req.headers['x-api-key'];
     if (apiKey !== CONFIG.IOS_API_KEY) {
@@ -568,6 +655,17 @@ app.patch('/api/commands/:id', (req, res) => {
     }
 
     console.log(`Commande ${id} mise à jour: ${status}`);
+
+    // Envoyer un email de réponse si la commande a été exécutée ou a échoué
+    if (status === CommandStatus.EXECUTED || status === CommandStatus.FAILED) {
+        const recipientEmail = extractEmail(updatedCommand.sender);
+        const { subject, body } = generateResponseContent(updatedCommand, result);
+
+        // Envoyer l'email en arrière-plan (ne pas bloquer la réponse)
+        sendResponseEmail(recipientEmail, subject, body).catch(err => {
+            console.error('Erreur envoi email de réponse:', err);
+        });
+    }
 
     res.json({
         success: true,

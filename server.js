@@ -417,24 +417,52 @@ app.get('/health', (req, res) => {
 app.post('/webhook/mailgun', upload.none(), (req, res) => {
     console.log('=== Réception webhook Mailgun ===');
 
+    // Debug: afficher la structure complète reçue
+    console.log('Body keys:', Object.keys(req.body || {}));
+    console.log('Body sample:', JSON.stringify(req.body, null, 2).substring(0, 500));
+
     try {
-        // Extraire les données du webhook
-        const {
-            sender,
-            from,
-            subject,
-            'body-plain': bodyPlain,
-            'stripped-text': strippedText,
-            timestamp,
-            token,
-            signature
-        } = req.body;
+        // Mailgun peut envoyer les données de différentes façons selon le type de webhook
+        // Pour les inbound emails (routes), les champs sont directement dans req.body
+        // Pour les event webhooks, ils peuvent être dans req.body.signature, etc.
+
+        let sender, from, subject, bodyPlain, strippedText, timestamp, token, signature;
+
+        // Vérifier si c'est un webhook d'événement (nouvelle structure)
+        if (req.body['event-data'] || req.body.signature) {
+            // Structure webhook événement
+            const eventData = req.body['event-data'] || {};
+            const sigData = req.body.signature || {};
+
+            timestamp = sigData.timestamp || req.body.timestamp;
+            token = sigData.token || req.body.token;
+            signature = sigData.signature || req.body.signature;
+
+            // Les données de l'email peuvent être dans event-data.message
+            const message = eventData.message || {};
+            sender = message.headers?.from || eventData.recipient;
+            from = sender;
+            subject = message.headers?.subject;
+            bodyPlain = message['body-plain'];
+            strippedText = message['stripped-text'];
+        } else {
+            // Structure webhook inbound (route) - champs directs
+            sender = req.body.sender;
+            from = req.body.from || req.body.From;
+            subject = req.body.subject || req.body.Subject;
+            bodyPlain = req.body['body-plain'] || req.body['Body-plain'];
+            strippedText = req.body['stripped-text'] || req.body['Stripped-text'];
+            timestamp = req.body.timestamp;
+            token = req.body.token;
+            signature = req.body.signature;
+        }
 
         const senderEmail = sender || from;
         const emailBody = strippedText || bodyPlain || '';
 
         console.log(`De: ${senderEmail}`);
         console.log(`Sujet: ${subject}`);
+        console.log(`Timestamp: ${timestamp}, Token: ${token ? 'present' : 'missing'}, Signature: ${signature ? 'present' : 'missing'}`);
 
         // Vérifier la signature Mailgun
         if (!verifyMailgunSignature(timestamp, token, signature)) {

@@ -336,19 +336,45 @@ function parseEmailCommand(subject, body) {
 
 /**
  * Vérifie la signature Mailgun pour s'assurer que le webhook est authentique
+ * @param {string} timestamp - Timestamp Unix du webhook
+ * @param {string} token - Token unique généré par Mailgun
+ * @param {string} signature - Signature HMAC-SHA256 à vérifier
+ * @returns {boolean} - true si la signature est valide
  */
 function verifyMailgunSignature(timestamp, token, signature) {
+    // En mode dev (clé non configurée), on accepte sans vérification
     if (!CONFIG.MAILGUN_API_KEY || CONFIG.MAILGUN_API_KEY === 'your-mailgun-api-key') {
         console.warn('ATTENTION: Clé API Mailgun non configurée, signature non vérifiée');
-        return true; // En dev, on accepte sans vérification
+        return true;
     }
 
-    const encodedToken = crypto
-        .createHmac('sha256', CONFIG.MAILGUN_API_KEY)
-        .update(timestamp + token)
-        .digest('hex');
+    // Vérifier que tous les champs requis sont présents
+    if (!timestamp || !token || !signature) {
+        console.error('Champs de signature Mailgun manquants:', {
+            hasTimestamp: !!timestamp,
+            hasToken: !!token,
+            hasSignature: !!signature
+        });
+        return false;
+    }
 
-    return encodedToken === signature;
+    // Mailgun attend HMAC-SHA256 de (timestamp + token), tout en string
+    const data = String(timestamp) + String(token);
+
+    const hmac = crypto.createHmac('sha256', CONFIG.MAILGUN_API_KEY);
+    hmac.update(data, 'utf8');
+    const expectedSignature = hmac.digest('hex');
+
+    const isValid = expectedSignature === signature;
+
+    if (!isValid) {
+        console.error('Signature Mailgun invalide:', {
+            expected: expectedSignature.substring(0, 10) + '...',
+            received: signature ? signature.substring(0, 10) + '...' : 'null'
+        });
+    }
+
+    return isValid;
 }
 
 /**
